@@ -1,0 +1,183 @@
+﻿'=== Batch export – Inventor 2026 ===
+' IPT → STEP (AP214), IDW → DWG(2007) + PDF
+' Xuất tất cả vào thư mục con "STEP + PDF + CAD"
+
+Try
+    Dim app As Inventor.Application = ThisApplication
+    Dim tobj As Inventor.TransientObjects = app.TransientObjects
+
+    '----- chọn thư mục gốc -----
+    Dim fbd As New System.Windows.Forms.FolderBrowserDialog()
+    fbd.Description = "Chọn thư mục CHÍNH chứa .ipt và .idw"
+    fbd.ShowNewFolderButton = False
+    If fbd.ShowDialog() <> System.Windows.Forms.DialogResult.OK Then
+        System.Windows.Forms.MessageBox.Show("Đã huỷ.", "iLogic")
+        Return
+    End If
+    Dim root As String = fbd.SelectedPath
+    If String.IsNullOrWhiteSpace(root) OrElse Not System.IO.Directory.Exists(root) Then
+        System.Windows.Forms.MessageBox.Show("Thư mục không hợp lệ.", "iLogic")
+        Return
+    End If
+
+    '----- thư mục xuất -----
+    Dim outDir As String = System.IO.Path.Combine(root, "STEP + PDF + CAD")
+    If Not System.IO.Directory.Exists(outDir) Then
+        System.IO.Directory.CreateDirectory(outDir)
+    End If
+
+    '----- tìm add-in -----
+    Dim STEPAddIn As Inventor.TranslatorAddIn = Nothing
+    Dim DWGAddIn  As Inventor.TranslatorAddIn = Nothing
+    Dim PDFAddIn  As Inventor.TranslatorAddIn = Nothing
+    For Each ai As Inventor.ApplicationAddIn In app.ApplicationAddIns
+        Dim t As Inventor.TranslatorAddIn = TryCast(ai, Inventor.TranslatorAddIn)
+        If t Is Nothing Then Continue For
+        Dim n As String = ai.DisplayName.ToLowerInvariant()
+        If STEPAddIn Is Nothing AndAlso n.Contains("step") Then STEPAddIn = t
+        If DWGAddIn  Is Nothing AndAlso (n.Contains("dwg") OrElse n.Contains("autocad")) Then DWGAddIn = t
+        If PDFAddIn  Is Nothing AndAlso n.Contains("pdf") Then PDFAddIn = t
+    Next
+    If STEPAddIn IsNot Nothing AndAlso Not STEPAddIn.Activated Then STEPAddIn.Activate()
+    If DWGAddIn  IsNot Nothing AndAlso Not DWGAddIn.Activated  Then DWGAddIn.Activate()
+    If PDFAddIn  IsNot Nothing AndAlso Not PDFAddIn.Activated  Then PDFAddIn.Activate()
+
+    '----- danh sách file -----
+    Dim ipts As String() = System.IO.Directory.GetFiles(root, "*.ipt", System.IO.SearchOption.TopDirectoryOnly)
+    Dim idws As String() = System.IO.Directory.GetFiles(root, "*.idw", System.IO.SearchOption.TopDirectoryOnly)
+    Dim total As Integer = ipts.Length + idws.Length
+    Dim doneCount As Integer = 0
+
+    Dim log As New System.Text.StringBuilder()
+    log.AppendLine("=== BATCH EXPORT - Inventor 2026 ===")
+    log.AppendLine("Folder: " & root)
+    log.AppendLine("Output: " & outDir)
+    log.AppendLine("User  : " & System.Environment.UserName)
+    log.AppendLine("Start : " & System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
+
+    '================ IPT → STEP =================
+    For Each f As String In ipts
+        app.StatusBarText = "IPT→STEP: " & System.IO.Path.GetFileName(f) & " [" & doneCount & "/" & total & "]"
+
+        Dim doc As Inventor.PartDocument = Nothing
+        For Each d As Inventor.Document In app.Documents
+            If String.Equals(d.FullFileName, f, System.StringComparison.InvariantCultureIgnoreCase) Then
+                doc = TryCast(d, Inventor.PartDocument) : Exit For
+            End If
+        Next
+        Dim openedHere As Boolean = False
+        If doc Is Nothing Then
+            doc = TryCast(app.Documents.Open(f, False), Inventor.PartDocument)
+            openedHere = (doc IsNot Nothing)
+        End If
+
+        If doc Is Nothing Then
+            log.AppendLine("[ERR] Không mở được IPT: " & f)
+        ElseIf STEPAddIn Is Nothing Then
+            log.AppendLine("[SKIP] Không có STEP translator: " & f)
+        Else
+            Dim outSTEP As String = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(f) & ".step")
+            If System.IO.File.Exists(outSTEP) Then
+                Try : System.IO.File.Delete(outSTEP) : Catch : End Try
+            End If
+
+            Dim ctx  As Inventor.TranslationContext = tobj.CreateTranslationContext()
+            ctx.Type = Inventor.IOMechanismEnum.kFileBrowseIOMechanism
+            Dim opts As Inventor.NameValueMap = tobj.CreateNameValueMap()
+            opts.Value("ApplicationProtocolType") = "AP214"
+            opts.Value("IncludeSketches") = False
+            opts.Value("Author") = System.Environment.UserName
+            Dim dm As Inventor.DataMedium = tobj.CreateDataMedium()
+            dm.FileName = outSTEP
+
+            If STEPAddIn.HasSaveCopyAsOptions(doc, ctx, opts) Then
+                STEPAddIn.SaveCopyAs(doc, ctx, opts, dm)
+                log.AppendLine("[OK] IPT → STEP: " & outSTEP)
+            Else
+                log.AppendLine("[ERR] STEP HasSaveCopyAsOptions=False: " & f)
+            End If
+        End If
+
+        If openedHere AndAlso (doc IsNot Nothing) Then doc.Close(True)
+        doneCount = doneCount + 1
+    Next
+
+    '============ IDW → DWG(2007) + PDF ============
+    For Each f As String In idws
+        app.StatusBarText = "IDW→DWG/PDF: " & System.IO.Path.GetFileName(f) & " [" & doneCount & "/" & total & "]"
+
+        Dim doc As Inventor.DrawingDocument = Nothing
+        For Each d As Inventor.Document In app.Documents
+            If String.Equals(d.FullFileName, f, System.StringComparison.InvariantCultureIgnoreCase) Then
+                doc = TryCast(d, Inventor.DrawingDocument) : Exit For
+            End If
+        Next
+        Dim openedHere As Boolean = False
+        If doc Is Nothing Then
+            doc = TryCast(app.Documents.Open(f, False), Inventor.DrawingDocument)
+            openedHere = (doc IsNot Nothing)
+        End If
+
+        If doc Is Nothing Then
+            log.AppendLine("[ERR] Không mở được IDW: " & f)
+        Else
+            '--- DWG 2007
+            If DWGAddIn Is Nothing Then
+                log.AppendLine("[SKIP] Không có DWG translator: " & f)
+            Else
+                Dim outDWG As String = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(f) & ".dwg")
+                If System.IO.File.Exists(outDWG) Then
+                    Try : System.IO.File.Delete(outDWG) : Catch : End Try
+                End If
+                Dim ctx As Inventor.TranslationContext = tobj.CreateTranslationContext()
+                ctx.Type = Inventor.IOMechanismEnum.kFileBrowseIOMechanism
+                Dim opts As Inventor.NameValueMap = tobj.CreateNameValueMap()
+                opts.Value("ACADVersion") = "AutoCAD 2007"
+                Dim dm As Inventor.DataMedium = tobj.CreateDataMedium()
+                dm.FileName = outDWG
+                If DWGAddIn.HasSaveCopyAsOptions(doc, ctx, opts) Then
+                    DWGAddIn.SaveCopyAs(doc, ctx, opts, dm)
+                    log.AppendLine("[OK] IDW → DWG(2007): " & outDWG)
+                Else
+                    log.AppendLine("[ERR] DWG HasSaveCopyAsOptions=False: " & f)
+                End If
+            End If
+
+            '--- PDF
+            If PDFAddIn Is Nothing Then
+                log.AppendLine("[SKIP] Không có PDF translator: " & f)
+            Else
+                Dim outPDF As String = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(f) & ".pdf")
+                If System.IO.File.Exists(outPDF) Then
+                    Try : System.IO.File.Delete(outPDF) : Catch : End Try
+                End If
+                Dim ctxP As Inventor.TranslationContext = tobj.CreateTranslationContext()
+                ctxP.Type = Inventor.IOMechanismEnum.kFileBrowseIOMechanism
+                Dim optsP As Inventor.NameValueMap = tobj.CreateNameValueMap()
+                optsP.Value("All_Color_AS_Black") = False
+                optsP.Value("Remove_Line_Weights") = False
+                optsP.Value("Vector_Resolution") = 400
+                optsP.Value("Sheet_Range") = Inventor.PrintRangeEnum.kPrintAllSheets
+                optsP.Value("Layers") = True
+                Dim dmP As Inventor.DataMedium = tobj.CreateDataMedium()
+                dmP.FileName = outPDF
+                If PDFAddIn.HasSaveCopyAsOptions(doc, ctxP, optsP) Then
+                    PDFAddIn.SaveCopyAs(doc, ctxP, optsP, dmP)
+                    log.AppendLine("[OK] IDW → PDF: " & outPDF)
+                Else
+                    log.AppendLine("[ERR] PDF HasSaveCopyAsOptions=False: " & f)
+                End If
+            End If
+        End If
+
+        If openedHere AndAlso (doc IsNot Nothing) Then doc.Close(True)
+        doneCount = doneCount + 1
+    Next
+
+    app.StatusBarText = "Batch export finished."
+    log.AppendLine("Done : " & System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
+    System.Windows.Forms.MessageBox.Show(log.ToString(), "Batch Export (2026)")
+
+Catch ex As System.Exception
+    System.Windows.Forms.MessageBox.Show("Lỗi rule: " & ex.Message, "iLogic")
+End Try
