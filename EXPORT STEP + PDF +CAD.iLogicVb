@@ -1,7 +1,4 @@
-﻿'=== Batch export – Inventor 2026 ===
-' IPT → STEP (AP214), IDW → DWG(2007) + PDF
-' Xuất tất cả vào thư mục con "STEP + PDF + CAD"
-
+﻿
 Try
     Dim app As Inventor.Application = ThisApplication
     Dim tobj As Inventor.TransientObjects = app.TransientObjects
